@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>棚札QR 業務アプリ（Bluetoothリーダー・最終版）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
+    .container { max-width: 480px; margin: auto; padding: 16px; }
+    h2 { text-align: center; font-size: 20px; margin-bottom: 12px; }
+    label { display: block; margin-top: 12px; font-size: 14px; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #ccc; margin-top: 4px; font-size: 16px; box-sizing: border-box; }
+    button { width: 100%; padding: 14px; margin-top: 16px; border: none; background: #0066ff; color: white; border-radius: 10px; font-size: 18px; cursor: pointer; }
+    button:active { opacity: 0.8; }
+    .section { background: white; padding: 16px; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 2px 6px rgba(0 0 0 / 10%); }
+    #result { margin-top: 10px; padding: 10px; border-radius: 6px; text-align: center; font-weight: bold; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>棚札QR 業務アプリ（Bluetoothリーダー版）</h2>
+
+    <div class="section">
+      <p style="text-align: center; color: #555; font-size: 14px; padding: 0;">BluetoothリーダーでQRコードをスキャンしてください。</p>
+    </div>
+
+    <div class="section">
+      <h3>QR読み取り結果</h3>
+      <label>物品コード (スキャン先)：</label>
+      <input id="code" type="text" placeholder="ここにスキャン結果が自動入力されます" onkeyup="parseBluetoothInput(event)"
+             autocomplete="off" autocorrect="off" inputmode="none"> 
+    </div>
+
+    <div class="section">
+      <h3>操作</h3>
+      <label>アクション：</label>
+      <select id="status" onchange="onStatusChange()">
+        <option value="none">選択してください</option>
+        <option value="out">出庫</option>
+        <option value="move">移動</option>
+      </select>
+
+      <div id="outFields" style="display:none">
+        <label>オーダー番号：</label><input id="orderNo" type="text">
+        <label>出庫元倉庫：</label>
+        <select id="warehouseOut">
+          <option value="本社(在庫室(4F))">本社(在庫室(4F))</option>
+          <option value="本社(在庫室(1F))">本社(在庫室(1F))</option>
+          <option value="ホクト">ホクト</option>
+          <option value="フクミヤ">フクミヤ</option>
+          <option value="Amazon">Amazon</option>
+          <option value="KTS">KTS</option>
+          <option value="仕掛かり4F">仕掛かり4F</option>
+          <option value="仕掛かり1F">仕掛かり1F</option>
+          <option value="ホビータイム">ホビータイム</option>
+        </select>
+        <label>数量：</label><input id="qtyOut" type="number" min="1">
+      </div>
+
+      <div id="moveFields" style="display:none">
+        <label>移動元倉庫：</label>
+        <select id="warehouseMoveFrom">
+          <option value="本社(在庫室(4F))" selected>本社(在庫室(4F))</option> 
+          <option value="本社(在庫室(1F))">本社(在庫室(1F))</option>
+          <option value="ホクト">ホクト</option>
+          <option value="フクミヤ">フクミヤ</option>
+          <option value="Amazon">Amazon</option>
+          <option value="KTS">KTS</option>
+          <option value="仕掛かり4F">仕掛かり4F</option>
+          <option value="仕掛かり1F">仕掛かり1F</option>
+          <option value="ホビータイム">ホビータイム</option>
+        </select>
+        <label>移動先倉庫：</label>
+        <select id="moveTo">
+          <option value="本社(在庫室(4F))">本社(在庫室(4F))</option>
+          <option value="本社(在庫室(1F))">本社(在庫室(1F))</option>
+          <option value="ホクト" selected>ホクト</option>
+          <option value="フクミヤ">フクミヤ</option>
+          <option value="Amazon">Amazon</option>
+          <option value="KTS">KTS</option>
+          <option value="仕掛かり4F">仕掛かり4F</option>
+          <option value="仕掛かり1F">仕掛かり1F</option>
+          <option value="ホビータイム">ホビータイム</option>
+        </select>
+        <label>数量：</label><input id="qtyMove" type="number" min="1">
+      </div>
+
+      <button onclick="sendData()">送信</button>
+      <p id="result"></p>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * 全角の英数字、カンマ、ハイフンを半角に変換するヘルパー関数
+     */
+    function toHalfWidth(str) {
+        if (!str) return str;
+        return str.replace(/[Ａ-Ｚａ-ｚ０-９，－　]/g, function(s) {
+            if (s === '　') return ' '; // 全角スペースを半角スペースに
+            return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+        });
+    }
+
+    /**
+     * Bluetooth QRリーダーからの入力を解析し、物品コードのみを抽出する
+     */
+    function parseBluetoothInput(event) {
+      const inputElement = document.getElementById("code");
+      
+      if (event.key === 'Enter') {
+        event.preventDefault(); 
+        
+        let fullText = inputElement.value.trim();
+        
+        // 1. 全角→半角変換を適用
+        fullText = toHalfWidth(fullText);
+        
+        // 2. カンマ区切りがある場合でも、物品コード部分のみを抽出
+        let code = fullText.split(',')[0].trim();
+        
+        // 3. 物品コードは半角英数字とハイフン以外を全て削除（ノイズ除去）
+        code = code.replace(/[^a-zA-Z0-9\-]/g, ''); 
+        
+        inputElement.value = code; // 物品コード欄にはクリーンなコードのみを残す
+        
+        showResult("QRスキャン完了: 物品コードを読み込みました。", 'green');
+          
+        // 次の操作のために数量入力欄にカーソルを移動
+        const status = document.getElementById("status").value;
+        if (status === "out") {
+          document.getElementById("qtyOut").focus();
+        } else if (status === "move") {
+          document.getElementById("qtyMove").focus();
+        } else {
+          // アクションが未選択の場合は、アクション選択プルダウンにフォーカス
+          document.getElementById("status").focus();
+        }
+      }
+    }
+
+    /**
+     * アクション選択時に表示/非表示を切り替える関数
+     * onchangeイベントで呼び出されます。
+     */
+    function onStatusChange() {
+      // #statusプルダウンの現在の値を取得
+      const st = document.getElementById("status").value;
+      
+      // 値に応じて outFields または moveFields を表示/非表示切り替え
+      document.getElementById("outFields").style.display = st === "out" ? "block" : "none";
+      document.getElementById("moveFields").style.display = st === "move" ? "block" : "none";
+      
+      // 結果メッセージを非表示にする
+      document.getElementById("result").style.display = 'none';
+      
+      // 表示されたフィールドの最初の入力項目にフォーカスを当てる（操作性向上のため）
+      if (st === "out") {
+          document.getElementById("orderNo").focus();
+      } else if (st === "move") {
+          document.getElementById("warehouseMoveFrom").focus();
+      }
+    }
+
+    function sendData() {
+      const action = document.getElementById("status").value;
+      if (action === "none") {
+        showResult("エラー: アクションを選択してください。", 'red');
+        return;
+      }
+      
+      document.getElementById("result").style.display = 'none'; 
+      
+      const payload = {
+        code: document.getElementById("code").value,
+        action: action, 
+        timestamp: new Date().toISOString()
+      };
+      
+      let qtyInputId = '';
+      if (payload.action === "out") {
+        qtyInputId = "qtyOut";
+        payload.orderNo = document.getElementById("orderNo").value;
+        // 出庫元倉庫は選択肢から取得
+        payload.moveFrom = document.getElementById("warehouseOut").value; 
+      }
+      if (payload.action === "move") {
+        qtyInputId = "qtyMove";
+        // 移動元倉庫は選択肢から取得
+        payload.moveFrom = document.getElementById("warehouseMoveFrom").value; 
+        payload.moveTo = document.getElementById("moveTo").value;
+      }
+      
+      if(qtyInputId) {
+          const qtyValue = document.getElementById(qtyInputId).value;
+          if (!qtyValue || isNaN(qtyValue) || Number(qtyValue) <= 0) {
+              showResult("エラー: 数量は1以上の数値を入力してください。", 'red');
+              return;
+          }
+          payload.qty = qtyValue;
+      }
+      
+      // 物品コードが空欄の場合はエラー
+      if (!payload.code) {
+          showResult("エラー: 物品コードをスキャンしてください。", 'red');
+          return;
+      }
+
+      console.log("送信データ:", payload);
+      // 実際には、このpayloadをAPIに送信する必要があります
+      showResult("送信しました (データはブラウザのコンソールログに出力されています)", 'blue');
+      
+      // 送信後、入力欄をクリアする
+      document.getElementById("code").value = "";
+      document.getElementById("status").value = "none";
+      onStatusChange(); // クリア後、フィールドを非表示に戻す
+      
+      // 数量とオーダー番号もクリア (あれば)
+      if (document.getElementById("orderNo")) document.getElementById("orderNo").value = "";
+      if (document.getElementById("qtyOut")) document.getElementById("qtyOut").value = "";
+      if (document.getElementById("qtyMove")) document.getElementById("qtyMove").value = "";
+    }
+    
+    // 結果メッセージ表示ヘルパー
+    function showResult(msg, color) {
+      const el = document.getElementById('result');
+      el.innerText = msg;
+      const styleMap = {
+        "green": { bg: "#e0f7e0", text: "#1e8449" },
+        "red": { bg: "#fbe5e4", text: "#c0392b" },
+        "blue": { bg: "#e0f7fa", text: "#2980b9" }
+      };
+      el.style.backgroundColor = styleMap[color].bg;
+      el.style.color = styleMap[color].text;
+      el.style.display = 'block';
+    }
+  </script>
+</body>
+</html>
